@@ -38,8 +38,12 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
 
 - none
 
+## Deferred directive (user decision 2026-10-28)
+
+- **"The Living Diorama" visual redesign** (illustrated 2.5D dollhouse style replacing pixel art) — full directive preserved verbatim in docs/ART_PIVOT_LIVING_DIORAMA.md. User said "do the art one later". Execute ONLY after specs 03–05 are verified AND the user green-lights it. Note: its §9 (fix indefinite loading / diagnostics without live integrations) overlaps with current work — the office scene landing IS the loading fix; the diagnostics hardening belongs to spec 05.
+
 ## Queued fixes (apply at next session boundary — do NOT touch node_modules while an OpenCode session is running)
 
-- `npm install @fastify/static@latest` — v<=10.1.1 has HIGH advisories (path traversal / route-guard bypass, GHSA-pr96-94w5-mx2h et al). Re-run tsc + server acceptance after.
-- `npm audit fix` for dev-only tinypool (critical) + @vitest/mocker (moderate), then `npm test`.
+- ~~@fastify/static upgrade~~ DONE at session-01 boundary (af035f7).
+- Remaining npm audit: dev-only tinypool (critical) + @vitest/mocker (moderate) — dev-only exposure; bump vitest major at Phase 7 hardening, not mid-pipeline.
 - esbuild postinstall blocked by install-scripts policy — harmless (vite build works) but consider `npm install-scripts approve esbuild` for clean installs.
