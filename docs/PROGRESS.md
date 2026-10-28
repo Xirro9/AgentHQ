@@ -31,3 +31,9 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
 ## Blockers
 
 - none
+
+## Queued fixes (apply at next session boundary — do NOT touch node_modules while an OpenCode session is running)
+
+- `npm install @fastify/static@latest` — v<=10.1.1 has HIGH advisories (path traversal / route-guard bypass, GHSA-pr96-94w5-mx2h et al). Re-run tsc + server acceptance after.
+- `npm audit fix` for dev-only tinypool (critical) + @vitest/mocker (moderate), then `npm test`.
+- esbuild postinstall blocked by install-scripts policy — harmless (vite build works) but consider `npm install-scripts approve esbuild` for clean installs.
