@@ -28,8 +28,10 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
 - Phase 0b done: scaffold + art pipeline (242 frames, QA'd visually via 2 critique cycles) + world layout + doctor. Commit 0d0a9df.
 - Specs 01-05 under docs/specs/. Session pipeline (sequential, one GLM slot):
   - 01-server ✅ verified (tsc strict, 25/25 vitest, live boot: health/snapshot/states/WS all confirmed; opencode adapter honestly 'disconnected'). Commit af035f7.
-  - 02-cats (implementation) — IN FLIGHT
-  - 03-office-scene, 04-panels-ui, 05-replay-hardening — queued
+  - 02-cats ✅ verified (tsc, 34/34 tests incl. 9 cat-sim tests; seeded determinism, biscuit rest fraction 0.67–0.74 in band, speed ratio >6x). Commit c00eca5.
+  - 03-office-scene (frontend agent) — IN FLIGHT
+  - 04-panels-ui, 05-replay-hardening — queued
+- Lesson learned: never `git add -A` while an OpenCode session is running — 0b2a05e accidentally committed a broken in-flight src/sim (repaired by session 02; targeted adds only from now on).
 - Client shell bootstrap landed (loader overlay in src/client/App.tsx; scene agent extends it). Full `hermes verify --json` gate: ok=true (bootstrap/build/test OK, readiness 200). Commit 0b2a05e.
 
 ## Blockers
