@@ -20,14 +20,119 @@ body {
 
 .hq-root { position: fixed; inset: 0; }
 #office { position: absolute; inset: 0; }
-#office canvas { display: block; }
+#office canvas {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
 
-/* loader overlay (removed by the scene slice once the office boots) */
+/* ---- HUD: top-left mode cluster ------------------------------------------- */
+.hq-hud-left {
+  position: absolute; top: 12px; left: 12px; z-index: 5;
+  display: flex; flex-direction: column; gap: 6px;
+  pointer-events: none;
+}
+.hq-badge-row { display: flex; align-items: center; gap: 8px; }
+.hq-badge {
+  display: inline-block;
+  padding: 3px 8px 2px;
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.hq-project {
+  font-size: 11px;
+  color: var(--cream);
+  background: var(--panel);
+  border: 1px solid rgba(155, 93, 229, 0.35);
+  padding: 3px 8px 2px;
+  border-radius: 6px;
+}
+.hq-clock {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cream);
+  background: var(--panel);
+  padding: 2px 8px;
+  border-radius: 6px;
+  width: fit-content;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- HUD: top-right agent strip -------------------------------------------- */
+.hq-strip {
+  position: absolute; top: 12px; right: 12px; z-index: 5;
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
+  max-width: min(560px, 60vw);
+}
+.hq-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--plum);
+  background: var(--panel);
+  color: var(--cream);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.hq-chip:hover { border-color: var(--cream); transform: translateY(-1px); }
+.hq-chip:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+.hq-chip--selected { border-color: var(--cream); background: rgba(59, 55, 92, 0.95); }
+.hq-chip-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.hq-chip-name { font-weight: 600; }
+.hq-chip-state {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: rgba(242, 230, 216, 0.72);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.hq-chip-pip { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+
+/* ---- HUD: bottom hint ------------------------------------------------------- */
+.hq-hint {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 5;
+  font-size: 11px;
+  color: rgba(242, 230, 216, 0.55);
+  background: rgba(18, 16, 31, 0.55);
+  padding: 3px 12px;
+  border-radius: 10px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ---- tooltip ---------------------------------------------------------------- */
+.hq-tooltip {
+  position: fixed; z-index: 20;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(38, 30, 51, 0.95);
+  border: 1px solid var(--violet);
+  color: var(--cream);
+  font-size: 12px;
+  line-height: 1.35;
+  display: flex; gap: 8px; align-items: baseline;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.hq-tooltip span { color: rgba(242, 230, 216, 0.7); font-size: 11px; }
+
+/* ---- loader overlay (removed by App once the office boots) ------------------ */
 .hq-loader {
   position: absolute; inset: 0; z-index: 10;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; background: var(--bg);
+  opacity: 1;
+  transition: opacity 400ms ease;
 }
+.hq-loader--done { opacity: 0; pointer-events: none; }
 .hq-loader-mark { font-size: 42px; animation: hq-breathe 2.2s ease-in-out infinite; }
 .hq-loader-text {
   font-size: 18px; font-weight: 600; letter-spacing: 0.04em;
@@ -39,5 +144,6 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .hq-loader-mark { animation: none; }
+  .hq-loader { transition: none; }
   * { transition: none !important; }
 }

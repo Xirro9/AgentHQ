@@ -6,3 +6,9 @@ data/
 .vite/
 *.tsbuildinfo
 .DS_Store
+
+# local verification scratch
+.playwright/
+.playwright-cli/
+inspect/
+.playwright-cli/

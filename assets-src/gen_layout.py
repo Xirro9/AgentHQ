@@ -40,7 +40,7 @@ put("furniture", "corkboard", 400, 56)
 # ---- server corner (top-left) ----
 put("furniture", "server_rack_0", 20, 52)
 put("furniture", "server_rack_1", 42, 52)
-put("furniture", "plant", 66, 64)
+put("furniture", "plant", 70, 64)
 
 # ---- desks: 6 specialists along the wall + Hermes manager corner ----
 # desk sprite 32x20; worker sits centered behind desk (baseline desk_y+14)
@@ -51,7 +51,7 @@ DESKS = [
     {"id": "tester",         "x": 280, "y": 104},
     {"id": "debugger",       "x": 96,  "y": 168},
     {"id": "security",       "x": 168, "y": 168},
-    {"id": "hermes",         "x": 384, "y": 112},
+    {"id": "hermes",         "x": 344, "y": 112},
 ]
 MONITOR_OF = {"architect": "diagram", "implementation": None, "frontend": "palette",
               "tester": "tests", "debugger": "wave", "security": "terminal", "hermes": "board"}
@@ -70,8 +70,8 @@ for d in DESKS:
         put("furniture", f"monitor_{mon}", dx + 8, dy - 12)
     if d["id"] == "implementation":
         put("furniture", "dual_monitor", dx + 2, dy - 13)
-    # chair behind desk (worker sits between chair and desk)
-    put("furniture", "chair", dx + 9, dy - 20)
+    # chair behind desk, backrest peeking above the worker's head
+    put("furniture", "chair", dx + 9, dy - 26)
     # props on desk surface
     for i, pr in enumerate(PROP_OF[d["id"]]):
         put("props", pr, dx + 2 + i * 8, dy + 1)
@@ -105,6 +105,14 @@ put("furniture", "desk", 16, 168)
 put("furniture", "printer", 22, 156)
 put("furniture", "plant", 448, 160)
 put("furniture", "plant", 8, 130)
+
+# ---- meeting area (mid-floor) ----
+put("furniture", "counter", 232, 216)
+put("furniture", "chair", 236, 202)
+put("furniture", "chair", 262, 202)
+put("props", "paper", 244, 220)
+put("props", "mug", 256, 220)
+put("furniture", "plant", 222, 226)
 
 # ---- interactables metadata ----
 interactables = [
