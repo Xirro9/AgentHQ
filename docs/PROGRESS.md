@@ -25,7 +25,8 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
 
 ## Current status
 
-- Phase 0b started: environment verified (opencode 2.2.0 + 6 agents, glm-server healthy, node 26, npm 12). Scaffold + art pipeline next.
+- Phase 0b done: scaffold + art pipeline (242 frames, QA'd visually via 2 critique cycles) + world layout + doctor. Commit 0d0a9df.
+- Specs 01-05 written under docs/specs/ (server, cats, office scene, panels, replay). Session pipeline running sequentially: 01-server (implementation agent) in flight.
 
 ## Blockers
 
