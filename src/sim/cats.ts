@@ -1,5 +1,5 @@
 // src/sim/cats.ts — pure cat simulation core for AgentHQ.
-// No Phaser, no React, no node builtins, no timers: the engine calls update(dt).
+// Engine-free, IO-free, timer-free: the engine calls update(dt).
 // Fully deterministic from (world, seed).
 
 import { Rng } from './rng'
@@ -148,6 +148,7 @@ type Mode = 'rest' | 'travel' | 'zoom' | 'scene' | 'happy'
 
 interface CatAgent extends CatAgentView {
   id: CatId
+  speed: number
   baseSpeed: number
   mode: Mode
   stateUntil: number       // rest countdown end (-1 = n/a)
@@ -158,7 +159,7 @@ interface CatAgent extends CatAgentView {
   arriveMax: number
   dest: Vec | null
   waitTime: number
-  scene: { def: SceneDef; i: number; wait: number } | null
+  scene: { def: SceneDef; i: number; wait: number; waiting: boolean; waitKind: 'act' | 'retry'; retries: number } | null
   nextDecisionAt: number
   mischiefReadyAt: number
   lastSceneEnd: Record<string, number>
@@ -225,6 +226,7 @@ export class CatCore {
       state: 'idle',
       path: [],
       baseSpeed: tun.speedMin,
+      speed: tun.speedMin,
       mode: 'rest',
       stateUntil: -1,
       zoomUntil: 0,
@@ -397,6 +399,7 @@ export class CatCore {
       }
       sc.i++
       sc.wait = 0
+      sc.waiting = false
       this.runSceneBeat(cat, other, 0)
       return
     }
@@ -414,7 +417,7 @@ export class CatCore {
     cat.mode = 'rest'
     if (cat.arriveState) {
       const dur = cat.rng.int(cat.arriveMin, cat.arriveMax)
-      this.setState(cat, cat.arriveState, dur)
+      this.setState(cat, cat.arriveState)
       cat.stateUntil = this.t + dur
       cat.arriveState = null
     } else {
@@ -454,9 +457,9 @@ export class CatCore {
   // ---- decisions ----
 
   private afterStateEnd(cat: CatAgent): void {
-    if (cat.id === 'biscuit' && this.t < cat.nextDecisionAt && cat.rng.chance(0.65)) {
+    if (cat.id === 'biscuit' && this.t < cat.nextDecisionAt && cat.rng.chance(0.45)) {
       // doze until the next scheduled decision check
-      this.setState(cat, 'sleep', Math.max(1, cat.nextDecisionAt - this.t))
+      this.setState(cat, 'sleep')
       cat.stateUntil = cat.nextDecisionAt
     } else {
       this.decide(cat)
@@ -511,30 +514,30 @@ export class CatCore {
   private decideBiscuit(cat: CatAgent): void {
     const cr = cat.rng
     const r = cr.next()
-    if (r < 0.34) this.rest(cat, 'sleep', cr.int(20, 40))
-    else if (r < 0.44) this.rest(cat, 'sit', cr.int(10, 20))
-    else if (r < 0.49) this.rest(cat, 'loaf', cr.int(10, 18))
-    else if (r < 0.57) this.rest(cat, 'stretch', cr.int(3, 5))
-    else if (r < 0.67) this.rest(cat, 'look', cr.int(3, 7))
+    if (r < 0.26) this.rest(cat, 'sleep', cr.int(18, 36))
+    else if (r < 0.36) this.rest(cat, 'sit', cr.int(10, 18))
+    else if (r < 0.42) this.rest(cat, 'loaf', cr.int(8, 16))
+    else if (r < 0.52) this.rest(cat, 'stretch', cr.int(3, 5))
+    else if (r < 0.64) this.rest(cat, 'look', cr.int(3, 7))
     else if (r < 0.7) this.rest(cat, 'wake', cr.int(2, 4))
     else {
       // waddle somewhere nearby, then settle
-      const dest = this.randCell(cat, cr, 40, 150)
-      if (!dest || !this.tryTravel(cat, dest, 'waddle', cr.int(TUNING.biscuit.speedMin, TUNING.biscuit.speedMax), { state: 'sit', min: 8, max: 16 })) {
+      const dest = this.randCell(cat, cr, 60, 180)
+      if (!dest || !this.tryTravel(cat, dest, 'waddle', cr.int(TUNING.biscuit.speedMin, TUNING.biscuit.speedMax), { state: 'sit', min: 6, max: 14 })) {
         this.rest(cat, 'sleep', cr.int(10, 20))
       }
     }
   }
 
   private rest(cat: CatAgent, state: string, dur: number): void {
-    this.setState(cat, state, dur)
+    this.setState(cat, state)
     cat.mode = 'rest'
     cat.stateUntil = this.t + dur
   }
 
   // ---- travel helpers ----
 
-  private setState(cat: CatAgent, state: string, _dur: number): void {
+  private setState(cat: CatAgent, state: string): void {
     if (cat.state !== state) {
       cat.state = state
       this.queue.push({ type: 'state', cat: cat.id, state })
@@ -561,7 +564,7 @@ export class CatCore {
     } else {
       cat.arriveState = null
     }
-    this.setState(cat, state, 0)
+    this.setState(cat, state)
     return true
   }
 
@@ -612,14 +615,21 @@ export class CatCore {
   }
 
   private pickScene(id: CatId): SceneDef | null {
+    const cat = this.agents[id]
     const pool = SCENES.filter(s => s.cat === id && this.canStart(s))
     if (pool.length === 0) return null
-    const rng = this.agents[id].rng
+    const rng = cat.rng
+    // variety dampener: scenes repeated within the last 400s lose weight (brief §7.3)
+    const recent = (name: string): number => {
+      const at = cat.lastSceneEnd[name]
+      return at !== undefined && this.t - at <= 400 ? 1 : 0
+    }
+    const weight = (s: SceneDef): number => s.weight / (1 + 2 * recent(s.name))
     let total = 0
-    for (const s of pool) total += s.weight
+    for (const s of pool) total += weight(s)
     let r = rng.next() * total
     for (const s of pool) {
-      r -= s.weight
+      r -= weight(s)
       if (r < 0) return s
     }
     return pool[pool.length - 1]
@@ -627,7 +637,7 @@ export class CatCore {
 
   private startScene(def: SceneDef): void {
     const cat = this.agents[def.cat]
-    cat.scene = { def, i: 0, wait: 0 }
+    cat.scene = { def, i: 0, wait: 0, waiting: false, waitKind: 'act', retries: 0 }
     cat.mode = 'scene'
     cat.path = []
     cat.dest = null
@@ -641,6 +651,13 @@ export class CatCore {
     const sc = cat.scene
     if (!sc) return
     const cr = cat.rng
+    if (sc.waiting) {
+      sc.wait -= dt
+      if (sc.wait > 0) return
+      sc.wait = 0
+      sc.waiting = false
+      if (sc.waitKind === 'act') sc.i++ // the performance finished
+    }
     let guard = 0
     while (cat.scene === sc && guard++ < 8) {
       const b = sc.def.beats[sc.i]
@@ -660,22 +677,25 @@ export class CatCore {
           const gotoState = cat.id === 'biscuit' ? 'waddle' : 'investigate'
           const speed = cr.int(TUNING[cat.id].speedMin, TUNING[cat.id].speedMax)
           if (!this.tryTravel(cat, tp, gotoState, speed)) {
-            this.endScene(cat) // target unreachable: resolve without breaking anything
+            // transient blockage (e.g. the other cat on the tile): retry, then resolve
+            sc.retries++
+            if (sc.retries > 5) {
+              this.endScene(cat)
+              return
+            }
+            sc.waiting = true
+            sc.waitKind = 'retry'
+            sc.wait = 1.2
             return
           }
           return // traveling; movement resumes on the next tick
         }
         case 'act': {
-          if (sc.wait <= 0) {
+          if (!sc.waiting) {
+            sc.waiting = true
+            sc.waitKind = 'act'
             sc.wait = cr.int(b.min, b.max)
-            this.setState(cat, b.state, sc.wait)
-            return
-          }
-          sc.wait -= dt
-          if (sc.wait <= 0) {
-            sc.wait = 0
-            sc.i++
-            continue
+            this.setState(cat, b.state)
           }
           return
         }
