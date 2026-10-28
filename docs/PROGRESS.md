@@ -26,7 +26,11 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
 ## Current status
 
 - Phase 0b done: scaffold + art pipeline (242 frames, QA'd visually via 2 critique cycles) + world layout + doctor. Commit 0d0a9df.
-- Specs 01-05 written under docs/specs/ (server, cats, office scene, panels, replay). Session pipeline running sequentially: 01-server (implementation agent) in flight.
+- Specs 01-05 under docs/specs/. Session pipeline (sequential, one GLM slot):
+  - 01-server ✅ verified (tsc strict, 25/25 vitest, live boot: health/snapshot/states/WS all confirmed; opencode adapter honestly 'disconnected'). Commit af035f7.
+  - 02-cats (implementation) — IN FLIGHT
+  - 03-office-scene, 04-panels-ui, 05-replay-hardening — queued
+- Client shell bootstrap landed (loader overlay in src/client/App.tsx; scene agent extends it). Full `hermes verify --json` gate: ok=true (bootstrap/build/test OK, readiness 200). Commit 0b2a05e.
 
 ## Blockers
 

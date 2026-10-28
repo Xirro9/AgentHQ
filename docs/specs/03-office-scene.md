@@ -29,7 +29,7 @@ Hard constraints: TypeScript strict, no new npm dependencies (phaser/react/react
    - Bottom-center hint text ("drag to pan · scroll to zoom · click a desk").
    - Tooltip div following `agenthq:hover` (dark plum bg, cream text, 1px violet border, 12px font).
    - Minimal CSS in `src/client/styles.css` — palette: bg #12101f, panels rgba(35,35,61,.92), cream text #f2e6d8, violet accents. Rounded 10px, subtle shadow. No UI framework.
-8. `src/client/main.tsx` + `src/client/office/bridge.ts` (window CustomEvent helpers, typed) as needed.
+8. `src/client/main.tsx` + `src/client/office/bridge.ts` (window CustomEvent helpers, typed) as needed. NOTE: `src/client/main.tsx`, `App.tsx`, `styles.css` already exist as a minimal loader shell (commit 0b2a05e) — extend/rework them in place; keep the loader overlay until the scene is ready, then remove it from App.
 
 ## Acceptance criteria (run them)
 1. `npx tsc -p tsconfig.json --noEmit` exit 0 (if src/server/state.ts doesn't exist yet, do NOT import it — poll /api/states only; leave a TODO).
