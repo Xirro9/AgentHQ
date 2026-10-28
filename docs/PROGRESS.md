@@ -30,7 +30,8 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
   - 01-server ✅ verified (tsc strict, 25/25 vitest, live boot: health/snapshot/states/WS all confirmed; opencode adapter honestly 'disconnected'). Commit af035f7.
   - 02-cats ✅ verified (tsc, 34/34 tests incl. 9 cat-sim tests; seeded determinism, biscuit rest fraction 0.67–0.74 in band, speed ratio >6x). Commit c00eca5.
   - 03-office-scene ✅ verified (tsc strict, build, 34/34 tests, Playwright: office renders, HUD live vs demo backend, desk hover/click/tooltip, wheel zoom + camera reset, pet→hearts, reduced-motion clean, 0 console errors). Store/useHq/Boot/Office/WorkerActor/CatLayer + bridge; sim untouched (client-side blocked rects + target alignment only).
-  - 04-panels-ui, 05-replay-hardening — queued
+  - 04-panels-ui (frontend agent) — IN FLIGHT (first launch killed by foreground timeout; relaunched clean)
+  - 05-replay-hardening — queued
 - Lesson learned: never `git add -A` while an OpenCode session is running — 0b2a05e accidentally committed a broken in-flight src/sim (repaired by session 02; targeted adds only from now on).
 - Client shell bootstrap landed (loader overlay in src/client/App.tsx; scene agent extends it). Full `hermes verify --json` gate: ok=true (bootstrap/build/test OK, readiness 200). Commit 0b2a05e.
 
