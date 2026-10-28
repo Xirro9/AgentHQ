@@ -1,8 +1,10 @@
 # OPERATIONS — running, health, data, and limits
 
-Everything in AgentHQ runs **on loopback** in a single npm package. There is no
-auth layer by design; the security model (docs/SECURITY_MODEL.md) therefore
-depends on the loopback binding — never expose these ports.
+Everything in AgentHQ runs in a single npm package and binds to **loopback by
+default** (`AGENTHQ_HOST`, see Environment variables below). There is no auth
+layer by design; the security model (docs/SECURITY_MODEL.md) therefore depends
+on the bind staying loopback-only on the host — never expose these ports to a
+network.
 
 ## Launch
 
@@ -17,7 +19,7 @@ Runs via `concurrently -k` (Ctrl+C stops both; `-k` kills the sibling):
 | Process | Command | Binds |
 |---------|---------|-------|
 | `web`   | `vite`  | `127.0.0.1:5173` — dev UI; proxies `/api/*` and `/ws` to the backend |
-| `server`| `tsx watch src/server/index.ts` | `127.0.0.1:4310` — Fastify API + WebSocket + static assets contract |
+| `server`| `tsx watch src/server/index.ts` | `${AGENTHQ_HOST:-127.0.0.1}:${AGENTHQ_PORT:-4310}` — Fastify API + WebSocket + static assets contract |
 
 Open **http://127.0.0.1:5173/**. The server auto-creates `data/agenthq.db`.
 
@@ -28,7 +30,8 @@ npm run build     # vite build → dist/
 npm start         # tsx src/server/index.ts --production
 ```
 
-Serves the built app **and** the API from `127.0.0.1:4310`. Non-API routes get
+Serves the built app **and** the API from `${AGENTHQ_HOST:-127.0.0.1}:${AGENTHQ_PORT:-4310}` — one
+port for everything. Non-API routes get
 the SPA fallback (`index.html`); unknown `/api/*` or `/ws` paths get a 404.
 
 ### Pre-flight
@@ -41,16 +44,56 @@ npm run doctor    # toolchain, art manifest, data/ writability, ports, adapter t
 
 - **Dev:** Ctrl+C in the `npm run dev` terminal (concurrent kill of both).
 - **Production:** send `SIGINT`/`SIGTERM`. The server shuts down gracefully:
-  heartbeat timer cleared, demo + OpenCode adapters stopped, WebSocket clients
-  closed, Fastify closed, SQLite database closed (`SIGINT`/`SIGTERM` handlers
-  in `src/server/index.ts`). Kill -9 is never required and may leave WAL files
-  behind (harmless — SQLite recovers, but see backup notes below).
+  heartbeat timer cleared, demo + OpenCode + hermes adapters stopped, WebSocket
+  clients closed, Fastify closed, SQLite database closed (`SIGINT`/`SIGTERM`
+  handlers in `src/server/index.ts`). Kill -9 is never required and may leave
+  WAL files behind (harmless — SQLite recovers, but see backup notes below).
+
+## Environment variables
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `AGENTHQ_HOST` | `127.0.0.1` | Bind address of the Fastify server (API + WS + static). Inside Docker set `0.0.0.0` so a published port reaches the container's eth0 — see "Running in Docker". |
+| `AGENTHQ_PORT` | `4310` | Port of the Fastify server. |
+| `HERMES_EVENTS_FILE` | `data/hermes-events.jsonl` | JSONL file the hermes adapter tails (repo-relative default; Hermes-side hook writer appends there). |
+| `HERMES_ADAPTER` | _(unset)_ | Set to `off` to disable the hermes file-tail adapter entirely (health then reports `disabled`). |
+| `OPENCODE_SERVER_URL` | `http://127.0.0.1:4096` | OpenCode event-stream probe target. |
+| `OPENCODE_ADAPTER` | _(unset)_ | `off\|disabled\|false\|0` disables the OpenCode adapter. |
+
+## Running in Docker
+
+The server runs inside the container; the user browses from the host. Docker
+port publishing forwards to the container's **eth0, not its loopback**, so the
+default loopback-only bind is unreachable from the host even with `-p`:
+
+```bash
+# inside the container — production mode serves UI + API on one port:
+AGENTHQ_HOST=0.0.0.0 AGENTHQ_PORT=4310 npm start
+
+# on the host — publish to the HOST's loopback ONLY:
+docker run --rm -p 127.0.0.1:4310:4310 ... agenthq
+
+# then open http://localhost:4310
+```
+
+- `-p 127.0.0.1:4310:4310` keeps the **host-side** publish address loopback-only.
+  There is no authentication; publishing on `0.0.0.0` of the host would expose
+  the unauthenticated event stream to the network. `AGENTHQ_HOST=0.0.0.0`
+  *inside* the container is fine — the Docker bridge isolates it, and the
+  host-side `-p` address is the security boundary.
+- Production mode serves the built UI and the API on the same port, so a single
+  published port is enough.
+- Dev mode from the host additionally needs `-p 127.0.0.1:5173:5173` and the
+  vite dev server started with `vite --host` (it also binds loopback by
+  default). The vite proxy targets `127.0.0.1:4310` inside the container.
+- The hermes hook-event bridge needs a shared volume: the Hermes-side writer
+  and the AgentHQ adapter must see the same `data/hermes-events.jsonl`.
 
 ## Health & data endpoints (all GET, loopback only)
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /api/health` | `{ ok: true, mode: "live"\|"demo", adapters: { demo, opencode }, latestSeq }` — `mode` is honest: `demo` unless the OpenCode adapter is actually connected |
+| `GET /api/health` | `{ ok: true, mode: "live"\|"demo", adapters: { demo, opencode, hermes }, latestSeq }` — `mode` is honest: `demo` unless the OpenCode adapter is actually connected |
 | `GET /api/snapshot?since=SEQ` | `{ events: NormalizedEvent[], seq }` — ascending events after `SEQ` (cap 500) |
 | `GET /api/events?agentId=&kind=&beforeSeq=&limit=` | filtered events, **newest first** (limit default 200, max 1000) — this is what Replay Mode consumes |
 | `GET /api/states` | per-agent derived work states (from the last 200 events) |
@@ -89,12 +132,15 @@ the server runs. Reset or restore is the pruning mechanism.
 
 | Port | Who | Binding |
 |------|-----|---------|
-| 4310 | Fastify API + WS (dev and prod) | `127.0.0.1` only — hardcoded `HOST` in `src/server/index.ts` |
+| 4310 | Fastify API + WS (dev and prod) | `127.0.0.1` default, overridable via `AGENTHQ_HOST` (loopback by design; inside Docker see "Running in Docker") |
 | 5173 | vite dev server | `127.0.0.1` (`vite.config.ts`) |
 | 4096 | OpenCode server (external, optional) | adapter target, not opened by AgentHQ |
 
-- Do **not** port-forward, reverse-proxy publicly, or run with `--host 0.0.0.0`:
-  there is no authentication, and the event stream is meant for the local user.
+- Do **not** port-forward, reverse-proxy publicly, or publish container ports
+  on a non-loopback host address: there is no authentication, and the event
+  stream is meant for the local user. The only sanctioned non-loopback bind is
+  `AGENTHQ_HOST=0.0.0.0` *inside* a container whose ports are published to the
+  **host's loopback** (`-p 127.0.0.1:4310:4310`).
 - The vite proxy hardcodes the API target `127.0.0.1:4310`; if you must move
   the web port (e.g. `npx vite --port 5199`), the API port stays put.
 - If :4310 is already in use the server exits — check for an already-running
@@ -106,10 +152,12 @@ the server runs. Reset or restore is the pruning mechanism.
 |---------|--------|-------|
 | `demo` | always available | scripted scenario, one beat every ~2.5s (8s pause between loops); clearly watermarked `DEMO` |
 | `opencode` | **experimental** | probes `GET $OPENCODE_SERVER_URL/api/event` every 10s (3s connect timeout); consumes only verified event streams; `disconnected` is the expected state when no OpenCode server runs. Never synthesizes events. See docs/INTEGRATION_AUDIT.md |
-| `hermes` | **deferred** | no verified structured-hook source in this environment; intentionally not faked |
+| `hermes` | **active (file-tail)** | tails `$HERMES_EVENTS_FILE` (default `data/hermes-events.jsonl`) every 2s and ingests Hermes lifecycle hook events written there as JSON lines (contract: docs/INTEGRATION_AUDIT.md). Missing file = `disconnected`; replays the last 1000 complete lines on (re)connect and after rotate/truncate; `HERMES_ADAPTER=off` disables |
 
-Environment: `OPENCODE_SERVER_URL` (default `http://127.0.0.1:4096`),
-`OPENCODE_ADAPTER=off|disabled|false|0` to disable the adapter entirely.
+Adapter environment: `OPENCODE_SERVER_URL` (default `http://127.0.0.1:4096`),
+`OPENCODE_ADAPTER=off|disabled|false|0` to disable the adapter entirely,
+`HERMES_EVENTS_FILE` (default `data/hermes-events.jsonl`),
+`HERMES_ADAPTER=off` to disable the hermes adapter entirely.
 
 ## Known limitations
 
@@ -123,8 +171,10 @@ Environment: `OPENCODE_SERVER_URL` (default `http://127.0.0.1:4096`),
 4. **OpenCode adapter is experimental** until its event API is verified
    against the installed binary (INTEGRATION_AUDIT.md); mapping confidence is
    capped at `medium` accordingly.
-5. **Hermes adapter deferred**; no manager-plan or "thought" data is
-   fabricated to fill the gap (honest-status rule, brief §1.1).
+5. **Hermes adapter ingests lifecycle hook events only** (tools, sessions,
+   gateway/skill status via the JSONL file bridge); no manager-plan or
+   "thought" data is fabricated to fill the gap (honest-status rule, brief
+   §1.1).
 6. **Desktop packaging (Tauri) is a later phase** (brief Phase 7).
 
 ## Verification & E2E

@@ -7,12 +7,19 @@ code wins and the doc must be fixed.
 
 ## 1. Network posture: loopback only
 
-- The Fastify server binds `127.0.0.1:4310` (hardcoded `HOST`); the vite dev
-  server binds `127.0.0.1:5173`. There is **no authentication and no TLS** —
+- The Fastify server binds `127.0.0.1:4310` by default (`resolveBind()` in
+  `src/server/index.ts`); the vite dev server binds `127.0.0.1:5173`. The
+  server bind is env-configurable (`AGENTHQ_HOST` / `AGENTHQ_PORT`, defaults
+  unchanged) — an **opt-in** override documented for the Docker container
+  bridge (docs/INTEGRATION_AUDIT.md, verified 2026-10-28): Docker port
+  publishing forwards to the container's eth0, so the container-side bind may
+  move, but the **host-side Docker publish address must stay loopback-only**
+  (`-p 127.0.0.1:4310:4310`). There is **no authentication and no TLS** —
   the model is "the local user's machine is the trust boundary".
 - Consequence (ops rule, docs/OPERATIONS.md): never port-forward, reverse-proxy,
-  or rebind to `0.0.0.0`. All endpoints are GET-only reads plus the WS stream;
-  no endpoint mutates state outside the local events database.
+  or publish the port beyond loopback on the host side. All endpoints are
+  GET-only reads plus the WS stream; no endpoint mutates state outside the
+  local events database.
 - The only outbound connections AgentHQ ever makes are the OpenCode adapter's
   probes to `$OPENCODE_SERVER_URL` (default `http://127.0.0.1:4096`) — also a
   loopback service the user already runs.
@@ -83,8 +90,8 @@ strings (`publicSummary` is prose, never HTML).
 - The demo adapter is clearly labeled (`source: "demo"`,
   `provenance: "simulation"`) and is **never mixed into a real live timeline**;
   demo events never flip the badge away from DEMO (client mode truth table).
-- Adapter or stream errors never crash the server: every fetch/parse is
-  guarded, and the probe loop reschedules.
+- Adapter or stream errors never crash the server: every fetch/parse and every
+  adapter timer callback is guarded, and the probe/poll loops reschedule.
 
 ## 5. Browser-side storage scope
 

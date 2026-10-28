@@ -9,10 +9,25 @@ import { openEventsDb } from './db'
 import { sanitizeEvent } from './redact'
 import { startDemoAdapter } from './adapters/demo'
 import { startOpencodeAdapter, type OpencodeAdapter } from './adapters/opencode'
+import { startHermesAdapter, type HermesAdapter } from './adapters/hermes'
 import type { NormalizedEvent, ServerMessage } from '../shared/events'
 
-const HOST = '127.0.0.1'
-const PORT = 4310
+/**
+ * Server bind address, env-configurable for container deployments (Docker port
+ * publishing forwards to the container's eth0, not its loopback — see
+ * docs/OPERATIONS.md "Running in Docker"). Defaults are byte-identical to the
+ * former hard-coded loopback bind.
+ */
+export function resolveBind(
+  env: Partial<Pick<NodeJS.ProcessEnv, 'AGENTHQ_HOST' | 'AGENTHQ_PORT'>> = process.env
+): { host: string; port: number } {
+  return {
+    host: env.AGENTHQ_HOST || '127.0.0.1',
+    port: Number(env.AGENTHQ_PORT) || 4310
+  }
+}
+
+const { host: HOST, port: PORT } = resolveBind()
 const SNAPSHOT_CAP = 500
 const WS_BEHIND_THRESHOLD = 150
 const HEARTBEAT_MS = 15_000
@@ -69,7 +84,7 @@ export async function buildServer() {
   app.get('/api/health', async () => ({
     ok: true,
     mode: currentMode(),
-    adapters: { demo: 'running', opencode: opencode.status() },
+    adapters: { demo: 'running', opencode: opencode.status(), hermes: hermes.status() },
     latestSeq: db.latestSeq()
   }))
 
@@ -141,6 +156,7 @@ export async function buildServer() {
 
   const stopDemo = startDemoAdapter(ingest)
   const opencode: OpencodeAdapter = startOpencodeAdapter(ingest)
+  const hermes: HermesAdapter = startHermesAdapter(ingest)
 
   const heartbeat = setInterval(() => {
     for (const client of clients) send(client, { type: 'ping', t: Date.now() })
@@ -150,6 +166,7 @@ export async function buildServer() {
     clearInterval(heartbeat)
     stopDemo()
     opencode.stop()
+    hermes.stop()
     for (const client of clients) {
       try {
         client.close()
