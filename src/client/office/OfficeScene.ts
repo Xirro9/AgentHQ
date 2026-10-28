@@ -10,13 +10,22 @@ import Phaser from 'phaser'
 import type { AgentId } from '../../shared/events'
 import { store, type Ambience } from '../net/store'
 import {
+  CAMERA_PAUSE_EVENT,
+  CAMERA_PAN_EVENT,
+  DESK_ANCHOR_EVENT,
+  FOLLOW_DESK_EVENT,
+  SETTINGS_EVENT,
+  emitDeskAnchor,
   emitFocusDesk,
   emitHover,
   emitInteract,
   emitPet,
   emitSceneReady,
+  emitSfxCue,
   onBridgeEvent,
-  type HoverAgentId
+  type CameraPanDetail,
+  type HoverAgentId,
+  type SceneSettings
 } from './bridge'
 import { buildCatWorld, CatLayer, createCatAnims, type CatHooks } from './cats'
 import { ATLAS_CACHE_KEY, LAYOUT_CACHE_KEY, OFFICE_SCENE_KEY } from './BootScene'
@@ -29,7 +38,8 @@ const CAMERA_MIN_ZOOM = 0.6
 const CAMERA_MAX_ZOOM = 1.8
 const ZOOM_STEP = 1.12
 const DRAG_THRESHOLD = 6
-const KEYBOARD_PAN_SPEED = 260 // logical px/s at zoom 1
+const FOLLOW_EASE_MS = 700
+const FOLLOW_ZOOM = 1.25
 const RACK_CYCLE_MS = 800
 const AMBIENCE_TWEEN_MS = 1500
 const CLEANUP_RETRY_S = 8
@@ -38,6 +48,9 @@ const MISCHIEF_EXCLAIM_RANGE = 80
 const GLOW_LAMP_COLOR = 0xf5c66b
 const GLOW_MONITOR_COLOR = 0x5ad0c8
 const HOVER_GLOW_COLOR = 0xf2e6d8
+
+/** Effects-quality multiplier on lamp/monitor glow intensity (spec 04 §4). */
+const GLOW_QUALITY: Record<'low' | 'medium' | 'high', number> = { low: 0, medium: 0.5, high: 1 }
 
 /** Flat floor decor: rendered above the floor bake, below all actors. */
 const FLAT_FRAMES = new Set(['rug', 'bowl_amber', 'bowl_teal', 'cat_bed'])
@@ -107,7 +120,6 @@ export class OfficeScene extends Phaser.Scene {
   private roomImages: Array<{ data: LayoutSprite; image: Phaser.GameObjects.Image }> = []
   private tint!: Phaser.GameObjects.Rectangle
 
-  private cursors: Phaser.Types.Input.Keyboard.CursorKeys | null = null
   private dragStart: { x: number; y: number } | null = null
   private dragDistance = 0
   private camTween: Phaser.Tweens.Tween | null = null
@@ -119,6 +131,19 @@ export class OfficeScene extends Phaser.Scene {
   private pendingCleanups: CleanupTask[] = []
   private storeUnsub: (() => void) | null = null
   private resetUnsub: (() => void) | null = null
+  // Spec 04 wiring: settings fan-out, camera pause (full-screen inspection),
+  // desk follow + anchor tracking, arrow-key pan forwarding, particle/quality
+  // gates. The 30/60 fps cap lives in the game loop (App), not here. Cat
+  // settings (enabled/mischief/petting) live in CatLayer.gate via applyGate.
+  private cameraPaused = false
+  private particlesEnabled = true
+  private effectsQuality: 'low' | 'medium' | 'high' = 'medium'
+  private selectedId: AgentId | null = null
+  private lastAnchor: { id: AgentId | null; x: number; y: number } = { id: null, x: -1, y: -1 }
+  private settingsUnsub: (() => void) | null = null
+  private followUnsub: (() => void) | null = null
+  private pauseUnsub: (() => void) | null = null
+  private panUnsub: (() => void) | null = null
 
   constructor() {
     super(OFFICE_SCENE_KEY)
@@ -144,10 +169,25 @@ export class OfficeScene extends Phaser.Scene {
     this.setupSteam()
     this.setupInput()
 
-    this.cursors = this.input.keyboard?.createCursorKeys() ?? null
-
     this.storeUnsub = store.subscribe(() => this.applyStore())
     this.resetUnsub = onBridgeEvent('agenthq:camera-reset', () => this.resetCamera())
+    // Spec 04 §4: the scene listens for `agenthq:settings` CustomEvents; the
+    // initial values come straight from the store (the event may predate boot).
+    this.applySceneSettings(store.get().settings)
+    this.settingsUnsub = onBridgeEvent<SceneSettings>(SETTINGS_EVENT, (s) => this.applySceneSettings(s))
+    this.followUnsub = onBridgeEvent(FOLLOW_DESK_EVENT, (d: { agentId: AgentId }) => this.followDesk(d.agentId))
+    this.pauseUnsub = onBridgeEvent(CAMERA_PAUSE_EVENT, (d: { paused: boolean }) => {
+      this.cameraPaused = d.paused
+    })
+    // Arrow-key camera pan arrives forwarded from the React shell (spec 04 §7),
+    // so typing in UI inputs never moves the office.
+    this.panUnsub = onBridgeEvent<CameraPanDetail>(CAMERA_PAN_EVENT, (d) => {
+      if (this.cameraPaused || (d.dx === 0 && d.dy === 0)) return
+      this.killCamTween()
+      const cam = this.cameras.main
+      cam.scrollX += d.dx / cam.zoom
+      cam.scrollY += d.dy / cam.zoom
+    })
     this.applyStore()
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -155,6 +195,14 @@ export class OfficeScene extends Phaser.Scene {
       this.storeUnsub = null
       this.resetUnsub?.()
       this.resetUnsub = null
+      this.settingsUnsub?.()
+      this.settingsUnsub = null
+      this.followUnsub?.()
+      this.followUnsub = null
+      this.pauseUnsub?.()
+      this.pauseUnsub = null
+      this.panUnsub?.()
+      this.panUnsub = null
       for (const worker of this.workers) worker.destroy()
       this.workers = []
       this.cats.destroy()
@@ -168,13 +216,13 @@ export class OfficeScene extends Phaser.Scene {
     const dt = Math.min(delta, 50) / 1000
     const t = time / 1000
 
-    this.cats.update(dt)
+    this.cats.update(dt) // no-ops while gate.enabled is false (sprites hidden)
+    if (this.selectedId !== null) this.updateDeskAnchor()
     for (const worker of this.workers) worker.update(t, dt)
 
     this.updateMonitorFlicker(t)
     this.updateRacks(delta)
     this.updateGlows(t)
-    this.updateKeyboardPan(delta)
     this.updatePendingCleanups(t)
   }
 
@@ -235,10 +283,13 @@ export class OfficeScene extends Phaser.Scene {
       },
       canClick: () => this.dragDistance <= DRAG_THRESHOLD,
       onPet: (cat) => {
+        if (!this.cats.gate.pettingEnabled) return // settings: petting off
         emitPet({ catId: cat })
         this.cats.pet(cat)
       },
       onMessCreated: (mess, x, y) => {
+        // Spec 04 §5: the printer gets a sound cue when Pixel battles it.
+        if (mess === 'paper_jam') emitSfxCue({ cue: 'printer' })
         this.pendingCleanups.push({ mess, pos: { x, y }, nextTryAt: this.nowSeconds + 2 })
       },
       onMessCleaned: (mess) => {
@@ -374,6 +425,11 @@ export class OfficeScene extends Phaser.Scene {
     if (!machine) return
     const puff = (): void => {
       if (!this.scene.isActive()) return
+      if (!this.particlesEnabled) {
+        // Particles off (settings): keep the scheduler alive, skip the puff.
+        this.time.delayedCall(5000, puff)
+        return
+      }
       const steam = this.add
         .sprite(machine.x + 7, machine.y - 2, 'fx', 'steam_0')
         .setOrigin(0.5, 1)
@@ -421,6 +477,7 @@ export class OfficeScene extends Phaser.Scene {
         )
       }
       if (this.dragDistance > DRAG_THRESHOLD) {
+        if (this.cameraPaused) return // full-screen inspection: camera holds still
         this.killCamTween()
         const cam = this.cameras.main
         cam.scrollX -= (pointer.x - pointer.prevPosition.x) / cam.zoom
@@ -432,6 +489,7 @@ export class OfficeScene extends Phaser.Scene {
       this.dragDistance = 0
     })
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
+      if (this.cameraPaused) return // camera motion paused while inspecting
       const cam = this.cameras.main
       this.killCamTween()
       const next = Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 1 / ZOOM_STEP : ZOOM_STEP), CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM)
@@ -480,20 +538,6 @@ export class OfficeScene extends Phaser.Scene {
     }
   }
 
-  private updateKeyboardPan(delta: number): void {
-    if (!this.cursors) return
-    const cam = this.cameras.main
-    const speed = (delta / 1000) * KEYBOARD_PAN_SPEED / cam.zoom
-    let dx = 0
-    let dy = 0
-    if (this.cursors.left.isDown) dx -= speed
-    if (this.cursors.right.isDown) dx += speed
-    if (this.cursors.up.isDown) dy -= speed
-    if (this.cursors.down.isDown) dy += speed
-    if (dx !== 0) cam.scrollX += dx
-    if (dy !== 0) cam.scrollY += dy
-  }
-
   private updatePendingCleanups(t: number): void {
     if (this.pendingCleanups.length === 0) return
     for (const task of this.pendingCleanups) {
@@ -518,15 +562,110 @@ export class OfficeScene extends Phaser.Scene {
 
   // ---- ambience ----------------------------------------------------------------
 
+  /** Client (viewport) px of a pointer, for HTML overlays. */
+  private clientPoint(pointer: Phaser.Input.Pointer): { x: number; y: number } {
+    const native = pointer.event
+    if (native && 'clientX' in native) return { x: native.clientX, y: native.clientY }
+    if (native && 'touches' in native && native.touches.length > 0) {
+      return { x: native.touches[0].clientX, y: native.touches[0].clientY }
+    }
+    return { x: pointer.x, y: pointer.y }
+  }
+
   private applyStore(): void {
     const snapshot = store.get()
     this.reducedMotion = snapshot.settings.reducedMotion
+    if (snapshot.selected !== this.selectedId) {
+      this.selectedId = snapshot.selected
+      this.lastAnchor.id = null // force a fresh anchor event on the next frame
+    }
     for (const worker of this.workers) {
       const runtime = snapshot.agentStates[worker.id]
       if (runtime) worker.setTrueState(runtime.state)
     }
     const next = resolveAmbience(snapshot.ambience)
     if (next !== this.ambience) this.applyAmbience(next, true)
+  }
+
+  // ---- spec 04 wiring: settings, desk anchor, follow ---------------------------
+
+  /**
+   * Scene slice of a validated settings change (`agenthq:settings`, spec 04 §4).
+   * Ambience + reduced motion ride in through the store subscription; this
+   * handles what only the scene can apply: the cat gate, particles, quality.
+   */
+  private applySceneSettings(s: SceneSettings): void {
+    this.particlesEnabled = s.particles
+    this.cats.applyGate({
+      enabled: s.catsEnabled,
+      mischiefLevel: s.mischiefLevel,
+      peaceful: s.peacefulMode,
+      pettingEnabled: s.pettingEnabled
+    })
+    if (s.effectsQuality !== this.effectsQuality) {
+      this.effectsQuality = s.effectsQuality
+      this.applyAmbience(this.ambience, false) // re-scale glow bases immediately
+    }
+  }
+
+  /**
+   * Emit the selected desk's viewport position so the React DeskPanel can stay
+   * anchored beside it while the camera pans/zooms (spec 04 §1).
+   */
+  private updateDeskAnchor(): void {
+    const id = this.selectedId
+    if (id === null) return
+    const ws = this.layout.workstations.find((w) => w.id === id)
+    if (!ws) return
+    const at = this.worldToClient(ws.desk.x + 18, ws.desk.y - 2)
+    const last = this.lastAnchor
+    if (last.id === id && Math.abs(last.x - at.x) < 0.5 && Math.abs(last.y - at.y) < 0.5) return
+    this.lastAnchor = { id, x: at.x, y: at.y }
+    emitDeskAnchor({ agentId: id, x: at.x, y: at.y })
+  }
+
+  /**
+   * Exact inverse of the camera transform (rotation is always 0 here):
+   * canvas = origin + (world - origin) · zoom − scroll · zoom, then the canvas
+   * buffer is mapped through the FIT-scaled CSS box into client px.
+   */
+  private worldToClient(wx: number, wy: number): { x: number; y: number } {
+    const cam = this.cameras.main
+    const ox = Math.floor(cam.x + cam.width * cam.originX + 0.5)
+    const oy = Math.floor(cam.y + cam.height * cam.originY + 0.5)
+    const cx = ox + (wx - ox) * cam.zoom - cam.scrollX * cam.zoom
+    const cy = oy + (wy - oy) * cam.zoom - cam.scrollY * cam.zoom
+    const canvas = this.game.canvas
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return { x: cx, y: cy }
+    return {
+      x: rect.left + (cx / canvas.width) * rect.width,
+      y: rect.top + (cy / canvas.height) * rect.height
+    }
+  }
+
+  /** DeskPanel Follow: ease the camera to the agent's desk (spec 04 §1). */
+  private followDesk(agentId: AgentId): void {
+    const ws = this.layout.workstations.find((w) => w.id === agentId)
+    if (!ws) return
+    const cam = this.cameras.main
+    const zoom = Phaser.Math.Clamp(Math.max(cam.zoom, FOLLOW_ZOOM), CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM)
+    const tx = ws.desk.x + 18 - cam.width / (2 * zoom)
+    const ty = ws.desk.y + 4 - cam.height / (2 * zoom)
+    this.killCamTween()
+    if (this.reducedMotion) {
+      cam.setZoom(zoom)
+      cam.centerOn(ws.desk.x + 18, ws.desk.y + 4)
+      return
+    }
+    this.camTween = this.tweens.add({
+      targets: cam,
+      zoom,
+      scrollX: tx,
+      scrollY: ty,
+      duration: FOLLOW_EASE_MS,
+      ease: 'Sine.easeInOut'
+    })
   }
 
   private applyAmbience(mode: RoomMode, animate: boolean): void {
@@ -540,7 +679,7 @@ export class OfficeScene extends Phaser.Scene {
     this.tweenValue(this.tint, tintAlpha, animate)
 
     for (const glow of this.glows) {
-      glow.base = GLOW_BASE[mode][glow.role]
+      glow.base = GLOW_BASE[mode][glow.role] * GLOW_QUALITY[this.effectsQuality]
       this.tweenValue(glow.image, glow.base, animate)
     }
   }
@@ -597,17 +736,8 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private emitHoverAt(agentId: HoverAgentId, pointer: Phaser.Input.Pointer): void {
-    let x = pointer.x
-    let y = pointer.y
-    const native = pointer.event
-    if (native && 'clientX' in native) {
-      x = native.clientX
-      y = native.clientY
-    } else if (native && 'touches' in native && native.touches.length > 0) {
-      x = native.touches[0].clientX
-      y = native.touches[0].clientY
-    }
-    emitHover({ agentId, x, y })
+    const at = this.clientPoint(pointer)
+    emitHover({ agentId, x: at.x, y: at.y })
   }
 
   private reactToMischief(x: number, y: number): void {

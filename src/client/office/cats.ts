@@ -101,6 +101,17 @@ export function createCatAnims(scene: Phaser.Scene): void {
   }
 }
 
+export interface CatGate {
+  enabled: boolean
+  mischiefLevel: 'calm' | 'normal' | 'chaos'
+  peaceful: boolean
+  pettingEnabled: boolean
+}
+
+/** Presentation-layer cooldown for "calm" mischief (seconds between scenes). */
+const CALM_GAP_S = 180
+const CHAOS_FORCE_SCENE = ['coffee_catastrophe', 'printer_battle', 'plant_assassin', 'cable_thief', 'zoomies_scene'] as const
+
 export class CatLayer {
   readonly core: CatCore
   private readonly scene: Phaser.Scene
@@ -109,6 +120,14 @@ export class CatLayer {
   private readonly sprites: Record<CatId, Phaser.GameObjects.Sprite>
   private readonly zz: Partial<Record<CatId, Phaser.GameObjects.Sprite>> = {}
   private readonly messSprites = new Map<MessId, Phaser.GameObjects.Sprite>()
+
+  /** Settings gates (spec 04 §4); applied via applyGate from the scene. */
+  gate: CatGate = { enabled: true, mischiefLevel: 'normal', peaceful: false, pettingEnabled: true }
+  private t = 0
+  /** The mischief scene currently under way is hidden (peaceful/calm gate). */
+  private sceneSuppressed = false
+  private lastShownAt = -1e9
+  private nextForceAt = 40
 
   constructor(
     scene: Phaser.Scene,
@@ -155,7 +174,41 @@ export class CatLayer {
   }
 
   update(dt: number): void {
+    this.t += dt
+    if (!this.gate.enabled) return // cats setting off: sim paused, sprites hidden
+    if (this.gate.mischiefLevel === 'chaos' && !this.gate.peaceful) this.maybeForceIncident()
     this.apply(this.core.update(dt))
+  }
+
+  /**
+   * Settings gates (spec 04 §4). Cats keep living under every setting; only
+   * "enabled: off" pauses the sim (sprites hidden). Peaceful mode and the calm
+   * level gate mischief at the presentation layer — scenes that are gated out
+   * never render, never exclaim, and their messes are resolved invisibly.
+   */
+  applyGate(gate: CatGate): void {
+    this.gate = gate
+    this.refreshVisibility()
+  }
+
+  private refreshVisibility(): void {
+    const vis = this.gate.enabled
+    for (const sprite of Object.values(this.sprites)) sprite.setVisible(vis)
+    for (const zz of Object.values(this.zz)) zz?.setVisible(vis)
+    for (const mess of this.messSprites.values()) mess.setVisible(vis && !this.sceneSuppressed)
+  }
+
+  private mischiefSuppressed(): boolean {
+    if (this.gate.peaceful) return true
+    return this.gate.mischiefLevel === 'calm' && this.t - this.lastShownAt < CALM_GAP_S
+  }
+
+  /** Chaos: nudge the sim with extra incident attempts (no-ops on cooldown). */
+  private maybeForceIncident(): void {
+    if (this.t < this.nextForceAt) return
+    this.nextForceAt = this.t + 40 + Math.random() * 30
+    const name = CHAOS_FORCE_SCENE[Math.floor(Math.random() * CHAOS_FORCE_SCENE.length)]
+    this.core.startIncident(name)
   }
 
   /** Pet interaction: bridge event already emitted by the scene. */
@@ -180,11 +233,21 @@ export class CatLayer {
           break
         }
         case 'mischief_started': {
+          if (this.mischiefSuppressed()) {
+            this.sceneSuppressed = true
+            break
+          }
+          this.lastShownAt = this.t
           const pos = this.core.world.targets[ev.target] ?? this.core[ev.cat as CatId]
           this.hooks.onMischief(ev.cat as CatId, pos.x, pos.y)
           break
         }
         case 'mess_created': {
+          if (this.sceneSuppressed) {
+            // Gated scene: resolve the mess inside the sim, render nothing.
+            this.core.assignCleanup(ev.mess, 'debugger')
+            break
+          }
           this.addMess(ev.mess, ev.x, ev.y)
           this.hooks.onMessCreated(ev.mess, ev.x, ev.y)
           break
@@ -210,6 +273,8 @@ export class CatLayer {
           break
         }
         case 'incident_resolved':
+          this.sceneSuppressed = false
+          this.refreshVisibility()
           break
       }
     }

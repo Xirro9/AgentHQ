@@ -13,6 +13,14 @@ import {
   type NormalizedEvent,
   type WorkState
 } from '../../shared/events'
+import { emitSettings } from '../office/bridge'
+import {
+  loadSettings,
+  saveSettings,
+  SETTINGS_STORAGE_KEY,
+  validateSettings,
+  type UiSettings
+} from '../ui/logic'
 
 export type Mode = 'live' | 'demo' | 'replay' | 'disconnected'
 export type Ambience = 'day' | 'evening' | 'night' | 'auto'
@@ -23,10 +31,12 @@ export interface AgentRuntimeState {
   since: string
 }
 
-export interface HqSettings {
-  /** Honors prefers-reduced-motion; the office freezes idle loops/tweens. */
-  reducedMotion: boolean
-}
+/**
+ * Full user settings (spec 04 §4), validated on load and on every patch.
+ * `ambience` is mirrored onto the top-level store field the scene already
+ * reads; `updateSettings` keeps both in sync.
+ */
+export type HqSettings = UiSettings
 
 export interface HqState {
   mode: Mode
@@ -54,13 +64,31 @@ function initialAgentStates(): Record<AgentId, AgentRuntimeState> {
 }
 
 function initialState(): HqState {
+  const settings = loadSettings()
   return {
     mode: 'disconnected',
     events: [],
     agentStates: initialAgentStates(),
     selected: null,
-    ambience: 'auto',
-    settings: { reducedMotion: prefersReducedMotion() }
+    ambience: settings.ambience,
+    // Fresh sessions honor the OS reduced-motion preference; a persisted
+    // explicit choice (true or false) wins over the media query.
+    settings: restoreReducedMotion(settings)
+  }
+}
+
+function restoreReducedMotion(settings: HqSettings): HqSettings {
+  if (localStorageAvailable() && localStorage.getItem(SETTINGS_STORAGE_KEY) !== null) {
+    return settings // persisted explicit value
+  }
+  return { ...settings, reducedMotion: settings.reducedMotion || prefersReducedMotion() }
+}
+
+function localStorageAvailable(): boolean {
+  try {
+    return typeof localStorage !== 'undefined'
+  } catch {
+    return false
   }
 }
 
@@ -124,5 +152,25 @@ export const store = {
   setAgentStates(states: Record<AgentId, AgentRuntimeState>): void {
     state = { ...state, agentStates: states }
     emit()
+  },
+
+  /**
+   * Merge a validated settings patch (spec 04 §4): persists to localStorage,
+   * mirrors `ambience` onto the top-level store field, and dispatches the
+   * `agenthq:settings` CustomEvent the office scene listens to.
+   */
+  updateSettings(patch: Partial<HqSettings>): void {
+    const next = validateSettings({ ...state.settings, ...patch })
+    const ambienceChanged = next.ambience !== state.ambience
+    const settingsChanged = JSON.stringify(next) !== JSON.stringify(state.settings)
+    if (!settingsChanged && !ambienceChanged) return
+    state = {
+      ...state,
+      ambience: next.ambience,
+      settings: next
+    }
+    saveSettings(next)
+    emit()
+    emitSettings(next)
   }
 }
