@@ -6,6 +6,9 @@
 //   socket down                     -> 'disconnected'
 //   server says demo/replay         -> 'demo' | 'replay'
 //   non-demo event over the socket  -> 'live'
+// Replay mode (spec 05 §1) suspends this transport entirely: while replay is
+// active the socket is closed, the poll paused, and the badge is owned by the
+// replay controller — leaving replay resumes the connect loop here.
 
 import { useEffect, useSyncExternalStore } from 'react'
 import {
@@ -14,6 +17,7 @@ import {
   type AgentId
 } from '../../shared/events'
 import { asWorkState, store, type AgentRuntimeState, type HqState, type Mode } from './store'
+import { isReplayActive, onReplayTransportChange } from './replay'
 
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 15_000
@@ -68,7 +72,7 @@ export function useHq(): HqState {
     }
 
     const poll = async (): Promise<void> => {
-      if (pollInFlight || disposed) return // debounced: one poll at a time
+      if (pollInFlight || disposed || isReplayActive()) return // one poll at a time; replay owns the store
       pollInFlight = true
       try {
         const [statesRes, healthRes] = await Promise.all([fetch('/api/states'), fetch('/api/health')])
@@ -109,7 +113,7 @@ export function useHq(): HqState {
     }
 
     const connect = (): void => {
-      if (disposed) return
+      if (disposed || isReplayActive()) return // replay suspended the transport
       let ws: WebSocket
       try {
         ws = new WebSocket(wsUrl())
@@ -151,6 +155,7 @@ export function useHq(): HqState {
       }
       ws.onclose = () => {
         if (socket === ws) socket = null
+        if (isReplayActive()) return // deliberate suspension: replay owns the badge
         setMode('disconnected')
         scheduleReconnect()
       }
@@ -167,8 +172,37 @@ export function useHq(): HqState {
     pollTimer = window.setInterval(() => void poll(), POLL_MS)
     void poll() // fill the HUD before the first snapshot lands
 
+    // Replay transport suspension (spec 05 §1): on enter, drop the socket and
+    // any pending reconnect without touching the badge (replay sets it); on
+    // leave, resume the connect loop immediately.
+    const offReplay = onReplayTransportChange((replayOn) => {
+      if (disposed) return
+      if (replayOn) {
+        if (reconnectTimer !== undefined) {
+          window.clearTimeout(reconnectTimer)
+          reconnectTimer = undefined
+        }
+        if (socket) {
+          const dying = socket
+          socket = null
+          dying.onclose = null
+          dying.onerror = null
+          dying.onmessage = null
+          try {
+            dying.close()
+          } catch {
+            /* already gone */
+          }
+        }
+      } else {
+        attempts = 0
+        connect()
+      }
+    })
+
     return () => {
       disposed = true
+      offReplay()
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
       if (pollTimer !== undefined) window.clearInterval(pollTimer)
       if (socket) {

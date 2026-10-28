@@ -36,9 +36,11 @@ export interface GlobalFeedProps {
   events: NormalizedEvent[]
   open: boolean
   onToggle(): void
+  /** Present when replay can be entered (spec 05 §1): opens the replay bar. */
+  onReplay?: () => void
 }
 
-export default function GlobalFeed({ events, open, onToggle }: GlobalFeedProps) {
+export default function GlobalFeed({ events, open, onToggle, onReplay }: GlobalFeedProps) {
   const [chip, setChip] = useState('all')
   const [text, setText] = useState('')
 
@@ -115,15 +117,27 @@ export default function GlobalFeed({ events, open, onToggle }: GlobalFeedProps) 
           </div>
         </section>
       )}
-      <button
-        type="button"
-        className={`hq-activity-btn${open ? ' hq-activity-btn--open' : ''}`}
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        Activity
-        {events.length > 0 && <span className="hq-activity-count hq-mono">{events.length}</span>}
-      </button>
+      <div className="hq-activity-row">
+        <button
+          type="button"
+          className={`hq-activity-btn${open ? ' hq-activity-btn--open' : ''}`}
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          Activity
+          {events.length > 0 && <span className="hq-activity-count hq-mono">{events.length}</span>}
+        </button>
+        {onReplay && (
+          <button
+            type="button"
+            className="hq-replay-entry"
+            title="Replay a stored window of events"
+            onClick={onReplay}
+          >
+            ↺ Replay
+          </button>
+        )}
+      </div>
       <span className="hq-feed-age hq-dim-text">
         {events.length > 0 ? formatRelative(eventTime(events[events.length - 1])) : ''}
       </span>

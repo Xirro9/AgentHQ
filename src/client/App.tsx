@@ -23,12 +23,14 @@ import {
 } from './office/bridge'
 import { store, type Mode } from './net/store'
 import { useHq } from './net/useHq'
+import { applyFpsCap, installUnfocusedFpsCap, particleCount } from './perf'
 import { initSfx, playClick } from './audio/sfx'
 import DeskPanel from './ui/DeskPanel'
 import WorkstationView from './ui/WorkstationView'
 import TaskBoard from './ui/TaskBoard'
 import Settings from './ui/Settings'
 import GlobalFeed from './ui/GlobalFeed'
+import ReplayBar from './ui/ReplayBar'
 import type { UiSettings } from './ui/logic'
 
 const MODE_BADGE: Record<Mode, { label: string; color: string }> = {
@@ -67,6 +69,7 @@ export default function App() {
   const [boardOpen, setBoardOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [feedOpen, setFeedOpen] = useState(false)
+  const [replayOpen, setReplayOpen] = useState(false)
   const [following, setFollowing] = useState(false)
 
   // Mount the Phaser game once; the office reports readiness via the bridge.
@@ -97,13 +100,14 @@ export default function App() {
     }
   }, [])
 
-  // Performance setting: retarget the loop's frame-rate limiter (spec 04 §4).
+  // Performance settings (spec 04 §4 + spec 05 §2): the loop's frame-rate
+  // limiter retargets to the user's cap — 30 while the tab is unfocused
+  // (visibilitychange, see src/client/perf.ts).
   useEffect(() => {
     const game = gameRef.current
     if (!game) return
-    const loop = game.loop as unknown as { fpsLimit: number; _limitRate: number }
-    loop.fpsLimit = hq.settings.fpsCap
-    loop._limitRate = 1000 / hq.settings.fpsCap
+    applyFpsCap(game, document.hidden ? 30 : hq.settings.fpsCap)
+    return installUnfocusedFpsCap(game, () => hq.settings.fpsCap)
   }, [hq.settings.fpsCap, ready])
 
   useEffect(() => {
@@ -174,13 +178,14 @@ export default function App() {
 
   // Mode preference (spec 04 §4): 'demo' pins the fixture view; 'auto' trusts
   // the server. Pinned demo filters the visible feed to demo events only and
-  // says so on the badge.
+  // says so on the badge. Replay (spec 05 §1) trumps the pin: the badge must
+  // keep saying REPLAY while a stored window is on the clocks.
   const demoPinned = settings.mode === 'demo'
   const events = useMemo(
-    () => (demoPinned ? hq.events.filter((e) => e.source === 'demo') : hq.events),
-    [demoPinned, hq.events]
+    () => (demoPinned && hq.mode !== 'replay' ? hq.events.filter((e) => e.source === 'demo') : hq.events),
+    [demoPinned, hq.mode, hq.events]
   )
-  const mode: Mode = demoPinned && hq.mode !== 'disconnected' ? 'demo' : hq.mode
+  const mode: Mode = hq.mode === 'replay' ? 'replay' : demoPinned && hq.mode !== 'disconnected' ? 'demo' : hq.mode
 
   // Keyboard: Esc closes topmost, T board, S settings, F follows the selected
   // agent. Arrow-key panning is forwarded to the scene bridge separately below.
@@ -197,6 +202,7 @@ export default function App() {
         else if (settingsOpen) setSettingsOpen(false)
         else if (boardOpen) setBoardOpen(false)
         else if (feedOpen) setFeedOpen(false)
+        else if (replayOpen) setReplayOpen(false) // bar unmount leaves replay
         else if (hq.selected) store.select(null)
         return
       }
@@ -212,7 +218,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [expanded, settingsOpen, boardOpen, feedOpen, hq.selected])
+  }, [expanded, settingsOpen, boardOpen, feedOpen, replayOpen, hq.selected])
 
   // Arrow keys pan the camera, forwarded to the scene bridge (spec 04 §7).
   // App owns the keyboard here so typing in inputs (or scrubbing a range
@@ -309,7 +315,10 @@ export default function App() {
       <div id="office" ref={hostRef} aria-label="AgentHQ office" />
 
       {settings.weather === 'rain' && settings.particles && !settings.reducedMotion && (
-        <RainOverlay fpsCap={settings.fpsCap} />
+        <RainOverlay
+          fpsCap={settings.fpsCap}
+          drops={particleCount(settings.effectsQuality, settings.particles, settings.reducedMotion, settings.fpsCap)}
+        />
       )}
 
       {expanded && <div className="hq-dim" aria-hidden="true" />}
@@ -461,7 +470,17 @@ export default function App() {
           setFeedOpen((v) => !v)
           playClick()
         }}
+        onReplay={
+          hq.mode === 'replay'
+            ? undefined // replay bar is already on stage
+            : () => {
+                setReplayOpen(true)
+                playClick()
+              }
+        }
       />
+
+      {replayOpen && <ReplayBar onClose={() => setReplayOpen(false)} />}
 
       {!loaderGone && (
         <div className={`hq-loader${ready ? ' hq-loader--done' : ''}`} role="status" aria-live="polite">
@@ -483,7 +502,7 @@ function projectIdOf(events: { projectId?: string }[]): string | null {
 }
 
 /** Decorative rain (settings → weather): a light canvas particle overlay. */
-function RainOverlay({ fpsCap }: { fpsCap: 30 | 60 }) {
+function RainOverlay({ fpsCap, drops: dropBudget }: { fpsCap: 30 | 60; drops: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
@@ -510,7 +529,7 @@ function RainOverlay({ fpsCap }: { fpsCap: 30 | 60 }) {
       drift: number
       alpha: number
     }
-    const drops: Drop[] = Array.from({ length: 110 }, () => ({
+    const drops: Drop[] = Array.from({ length: dropBudget }, () => ({
       x: Math.random(),
       y: Math.random(),
       len: 9 + Math.random() * 14,
@@ -555,7 +574,7 @@ function RainOverlay({ fpsCap }: { fpsCap: 30 | 60 }) {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', resize)
     }
-  }, [fpsCap])
+  }, [fpsCap, dropBudget])
 
   return <canvas ref={canvasRef} className="hq-rain" aria-hidden="true" />
 }

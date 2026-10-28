@@ -14,14 +14,14 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
 ## Milestones
 
 - [x] Phase 0a: repo cloned, brief committed, README published
-- [ ] Phase 0b: environment audit + scaffold + toolchain verified  ← IN PROGRESS
-- [ ] Phase 1: living office (scene, camera, depth, desks, HUD, demo fixture, idle loops, basic cats, audio controls)
-- [ ] Phase 2: full cat personality system (FSMs, incidents, cleanup, petting)
-- [ ] Phase 3: read-only telemetry backend (schema, adapters, SQLite, WS, reconnect, gaps)
-- [ ] Phase 4: live office connection (real events drive desks; honest provenance)
-- [ ] Phase 5: workstation explorer (tabs, filters, history, replay)
-- [ ] Phase 6: visual/sonic polish + vision-QA cycles
-- [ ] Phase 7: packaging/hardening (Tauri evaluation)
+- [x] Phase 0b: environment audit + scaffold + toolchain verified
+- [x] Phase 1: living office (scene, camera, depth, desks, HUD, demo fixture, idle loops, basic cats, audio controls) — spec sessions 01-03
+- [x] Phase 2: full cat personality system (FSMs, incidents, cleanup, petting) — spec session 02
+- [x] Phase 3: read-only telemetry backend (schema, adapters, SQLite, WS, reconnect, gaps) — spec sessions 01+05
+- [x] Phase 4: live office connection — demo-driven with honest mode badges; REAL live integration still pending (opencode adapter experimental, hermes deferred — see INTEGRATION_AUDIT.md)
+- [x] Phase 5: workstation explorer (tabs, filters, history, replay) — spec sessions 04+05
+- [ ] Phase 6: visual/sonic polish + vision-QA cycles — partially covered by per-session vision QA; superseded by the deferred Living Diorama pivot (docs/ART_PIVOT_LIVING_DIORAMA.md)
+- [ ] Phase 7: packaging/hardening (Tauri evaluation, dev-only npm audit bumps, esbuild scripts policy)
 
 ## Current status
 
@@ -31,7 +31,7 @@ Durable milestone tracker. Update after every verified milestone. Keep terse —
   - 02-cats ✅ verified (tsc, 34/34 tests incl. 9 cat-sim tests; seeded determinism, biscuit rest fraction 0.67–0.74 in band, speed ratio >6x). Commit c00eca5.
   - 03-office-scene ✅ verified (tsc strict, build, 34/34 tests, Playwright: office renders, HUD live vs demo backend, desk hover/click/tooltip, wheel zoom + camera reset, pet→hearts, reduced-motion clean, 0 console errors). Store/useHq/Boot/Office/WorkerActor/CatLayer + bridge; sim untouched (client-side blocked rects + target alignment only).
   - 04-panels-ui ✅ Hermes-verified (independent re-run: tsc 0, build 0, 59/59 vitest, hermes verify ok=true, Playwright click-through: Hermes DeskPanel opens with live feed + cohesive styling, task-001 cycling columns, 62s idle 0 console errors). Commit aeed6ac. Architecture adopted: fps cap = game loop fpsLimit (App), cat gates = CatLayer.applyGate (sim untouched), settings = store.updateSettings (validate+persist+CustomEvent).
-  - 05-replay-hardening (implementation agent) — IN FLIGHT
+  - 05-replay-hardening ✅ Hermes-verified (independent re-run: tsc 0, build 0, 81/81 vitest; Playwright click-through: Activity drawer → ↺ Replay → "last 5m" → transport/speeds/scrubber present → after Play the feed populates live ("all sources · 7 events"); docs EVENT_SCHEMA/OPERATIONS/SECURITY_MODEL/TEST_MATRIX + scripts/e2e.md + docs/evidence/ screenshots). Replay = pure ReplayTimeline (src/client/net/replay.ts) + ReplayBar; perf.ts = fps cap w/ visibilitychange + particle budget + timer map. NOTE: full `hermes verify` at this boundary BLOCKED by approval queue — all component gates green, formal run pending.
 - Lesson learned: never `git add -A` while an OpenCode session is running — 0b2a05e accidentally committed a broken in-flight src/sim (repaired by session 02; targeted adds only from now on).
 - Client shell bootstrap landed (loader overlay in src/client/App.tsx; scene agent extends it). Full `hermes verify --json` gate: ok=true (bootstrap/build/test OK, readiness 200). Commit 0b2a05e.
 
