@@ -56,6 +56,16 @@ Verified facts about this workstation's environment. "Verified" = actually obser
   its loopback, so the container-side bind is env-configurable
   (`AGENTHQ_HOST`, default unchanged `127.0.0.1`) while the host-side publish
   address must stay loopback-only (`-p 127.0.0.1:4310:4310`).
+- Demo yields to live sources (session 06 addendum): the demo adapter stays
+  silent while the hermes OR opencode adapter is `connected` and resumes its
+  beat chain from the next un-emitted beat when the last live source
+  disconnects; `mode` truth is `live` when any direct-provenance adapter is
+  connected (`AGENTHQ_DEMO=on` forces the demo path for dev/QA). Consequence:
+  opencode desks are honestly offline until the opencode adapter connects —
+  known limitations recorded: the deployed `opencode serve` instance is
+  401-auth-protected in this environment, and whether OpenCode events can
+  reach AgentHQ through the server's event stream is unverified (see
+  "Unverified / to confirm at Phase 3").
 
 ## Known limitations (security review 2026-10-28)
 

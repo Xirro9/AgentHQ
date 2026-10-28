@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { deriveAgentStates } from './state'
 import { openEventsDb } from './db'
 import { sanitizeEvent } from './redact'
-import { startDemoAdapter } from './adapters/demo'
+import { startDemoAdapter, setDemoYielded } from './adapters/demo'
 import { startOpencodeAdapter, type OpencodeAdapter } from './adapters/opencode'
 import { startHermesAdapter, type HermesAdapter } from './adapters/hermes'
 import type { NormalizedEvent, ServerMessage } from '../shared/events'
@@ -54,8 +54,35 @@ export async function buildServer() {
   const db = openEventsDb()
   const clients = new Set<WsClient>()
 
+  // Assigned right after construction below; null only during that window (the
+  // hermes adapter's synchronous boot poll can emit through ingest before the
+  // const would exist — hence the late binding instead of a const declaration).
+  let opencode: OpencodeAdapter | null = null
+  let hermes: HermesAdapter | null = null
+
+  // Mode truth (spec 01, extended): 'live' when ANY direct-provenance adapter
+  // (hermes OR opencode) reports 'connected'; 'demo' otherwise.
   const currentMode = (): string =>
-    opencode.status() === 'connected' ? 'live' : 'demo'
+    hermes?.status() === 'connected' || opencode?.status() === 'connected' ? 'live' : 'demo'
+
+  // null until the boot baseline is set: the first syncMode() call only baselines
+  // (clients get the boot mode via the WS snapshot), later flips push 'mode'.
+  let lastPushedMode: string | null = null
+
+  /**
+   * Re-evaluate demo yield + mode truth after any adapter status flip. Both
+   * live adapters emit exactly one system integration event per status
+   * transition, so ingest() calls this for those kinds; boot calls it once to
+   * compute the initial yield from the initial adapter states.
+   */
+  function syncMode(): void {
+    const mode = currentMode()
+    setDemoYielded(mode === 'live') // yielded=true pauses demo — pause exactly while a live source is connected
+    if (lastPushedMode !== null && lastPushedMode !== mode) {
+      broadcast({ type: 'mode', mode })
+    }
+    lastPushedMode = mode
+  }
 
   function send(client: WsClient, message: ServerMessage) {
     if (client.readyState !== WS_OPEN) return
@@ -79,12 +106,17 @@ export async function buildServer() {
     // dedup (insertEvent returned an already-stored event) is not re-broadcast
     if (!stored || stored.ingestSeq <= before) return
     broadcast({ type: 'event', event: stored })
+    // Adapter status transitions surface as system integration events (exactly
+    // one per flip) — each one re-evaluates the demo yield and mode truth.
+    if (clean.kind === 'integration.connected' || clean.kind === 'integration.disconnected') {
+      syncMode()
+    }
   }
 
   app.get('/api/health', async () => ({
     ok: true,
     mode: currentMode(),
-    adapters: { demo: 'running', opencode: opencode.status(), hermes: hermes.status() },
+    adapters: { demo: 'running', opencode: opencode?.status() ?? 'disabled', hermes: hermes?.status() ?? 'disabled' },
     latestSeq: db.latestSeq()
   }))
 
@@ -155,8 +187,9 @@ export async function buildServer() {
   }
 
   const stopDemo = startDemoAdapter(ingest)
-  const opencode: OpencodeAdapter = startOpencodeAdapter(ingest)
-  const hermes: HermesAdapter = startHermesAdapter(ingest)
+  opencode = startOpencodeAdapter(ingest)
+  hermes = startHermesAdapter(ingest)
+  syncMode() // initial demo yield + mode baseline from the boot-time adapter states
 
   const heartbeat = setInterval(() => {
     for (const client of clients) send(client, { type: 'ping', t: Date.now() })
@@ -165,8 +198,8 @@ export async function buildServer() {
   async function stop() {
     clearInterval(heartbeat)
     stopDemo()
-    opencode.stop()
-    hermes.stop()
+    opencode?.stop()
+    hermes?.stop()
     for (const client of clients) {
       try {
         client.close()

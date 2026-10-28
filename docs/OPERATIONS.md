@@ -59,6 +59,7 @@ npm run doctor    # toolchain, art manifest, data/ writability, ports, adapter t
 | `HERMES_ADAPTER` | _(unset)_ | Set to `off` to disable the hermes file-tail adapter entirely (health then reports `disabled`). |
 | `OPENCODE_SERVER_URL` | `http://127.0.0.1:4096` | OpenCode event-stream probe target. |
 | `OPENCODE_ADAPTER` | _(unset)_ | `off\|disabled\|false\|0` disables the OpenCode adapter. |
+| `AGENTHQ_DEMO` | _(unset)_ | Truthy values (`1\|true\|yes\|on`, case-insensitive) force the demo adapter to keep emitting even while a live adapter is connected (dev/QA of the demo path). |
 
 ## Running in Docker
 
@@ -93,14 +94,27 @@ docker run --rm -p 127.0.0.1:4310:4310 ... agenthq
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /api/health` | `{ ok: true, mode: "live"\|"demo", adapters: { demo, opencode, hermes }, latestSeq }` — `mode` is honest: `demo` unless the OpenCode adapter is actually connected |
+| `GET /api/health` | `{ ok: true, mode: "live"\|"demo", adapters: { demo, opencode, hermes }, latestSeq }` — `mode` is honest: `live` when the hermes OR the OpenCode adapter is actually connected, `demo` otherwise |
 | `GET /api/snapshot?since=SEQ` | `{ events: NormalizedEvent[], seq }` — ascending events after `SEQ` (cap 500) |
 | `GET /api/events?agentId=&kind=&beforeSeq=&limit=` | filtered events, **newest first** (limit default 200, max 1000) — this is what Replay Mode consumes |
 | `GET /api/states` | per-agent derived work states (from the last 200 events) |
 | `WS /ws` | client sends `{type:"hello", lastSeq}` → `{type:"snapshot", events, seq, mode}`; then `event`/`mode`/`gap`/`ping` (15s heartbeat). See docs/EVENT_SCHEMA.md |
 
-`mode` truth: `live` only when the OpenCode adapter reports `connected`;
-otherwise `demo`. The UI badge mirrors exactly what the server reports.
+`mode` truth: `live` when **any** direct-provenance adapter — the hermes
+adapter **or** the OpenCode adapter — reports `connected`; `demo` otherwise.
+The UI badge mirrors exactly what the server reports, and every live→demo /
+demo→live transition is pushed to connected WS clients as a `{type:"mode"}`
+message (the boot mode arrives in the WS snapshot).
+
+### Demo yield
+
+The demo adapter **yields to live data**: it emits its scripted beats only
+while NO live adapter (hermes OR opencode) is connected. When a live adapter
+connects, the demo goes silent within one beat; when the last live adapter
+disconnects, the demo resumes from the **next un-emitted beat** — the beat
+chain never replays old beats and eventIds stay unique. Set
+`AGENTHQ_DEMO=on` to force demo emission regardless (dev/QA of the demo
+path while a live source is connected).
 
 ## Data: location, reset, backup, restore
 
@@ -112,7 +126,8 @@ otherwise `demo`. The UI badge mirrors exactly what the server reports.
   rm -f data/agenthq.db data/agenthq.db-wal data/agenthq.db-shm
   npm run dev   # or npm start — the db is recreated empty
   ```
-  After a reset the demo adapter repopulates the timeline within seconds.
+  After a reset the demo adapter repopulates the timeline within seconds
+  (while no live adapter is connected — see "Demo yield" above).
 - **Backup:** stop the server, then copy the file:
   ```bash
   cp data/agenthq.db backup/agenthq-$(date +%F).db
@@ -150,7 +165,7 @@ the server runs. Reset or restore is the pruning mechanism.
 
 | Adapter | Status | Notes |
 |---------|--------|-------|
-| `demo` | always available | scripted scenario, one beat every ~2.5s (8s pause between loops); clearly watermarked `DEMO` |
+| `demo` | always available | scripted scenario, one beat every ~2.5s (8s pause between loops); clearly watermarked `DEMO`; **yields to live sources** — silent while hermes or opencode is `connected`, resumes its beat chain when they disconnect (`AGENTHQ_DEMO=on` overrides) |
 | `opencode` | **experimental** | probes `GET $OPENCODE_SERVER_URL/api/event` every 10s (3s connect timeout); consumes only verified event streams; `disconnected` is the expected state when no OpenCode server runs. Never synthesizes events. See docs/INTEGRATION_AUDIT.md |
 | `hermes` | **active (file-tail)** | tails `$HERMES_EVENTS_FILE` (default `data/hermes-events.jsonl`) every 2s and ingests Hermes lifecycle hook events written there as JSON lines (contract: docs/INTEGRATION_AUDIT.md). Missing file = `disconnected`; replays the last 1000 complete lines on (re)connect and after rotate/truncate; `HERMES_ADAPTER=off` disables |
 

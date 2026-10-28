@@ -77,17 +77,60 @@ const BEATS: Array<() => EventDraft[]> = [
   }))
 ]
 
+// ---- demo yield (live sources take precedence) -------------------------------
+
+/**
+ * Truthy `AGENTHQ_DEMO` (`1`/`true`/`yes`/`on`, case-insensitive) forces the
+ * demo to run regardless of yield requests — a dev/QA override to exercise the
+ * demo path while a live adapter is connected.
+ */
+export function demoForcedByEnv(
+  env: Partial<Pick<NodeJS.ProcessEnv, 'AGENTHQ_DEMO'>> = process.env
+): boolean {
+  return ['1', 'true', 'yes', 'on'].includes((env.AGENTHQ_DEMO ?? '').trim().toLowerCase())
+}
+
+// Yield state is process-global: the demo adapter is a per-process singleton
+// (one server = one scripted scenario), so the server toggles it via
+// setDemoYielded() and the running instance reacts through onYieldChange.
+let yielded = false
+let onYieldChange: ((y: boolean) => void) | null = null
+
+/**
+ * Pause/resume demo emission. While yielded, the running demo adapter stops
+ * emitting within one beat and freezes its beat chain on the next un-emitted
+ * beat; on resume it continues exactly there — the chain never replays old
+ * beats and eventIds stay unique. A truthy AGENTHQ_DEMO env override makes the
+ * running adapter ignore yield requests entirely.
+ */
+export function setDemoYielded(y: boolean): void {
+  if (yielded === y) return
+  yielded = y
+  onYieldChange?.(y)
+}
+
 /**
  * Deterministic scripted scenario, one beat every ~2.5s with an 8s pause before
  * looping. Uses a single self-rescheduling timer (no leaked timers); the returned
  * stop function cancels the pending beat.
+ *
+ * Yield (setDemoYielded): when a live adapter is connected the server yields
+ * the demo — the pending timer is cancelled and the chain freezes on the next
+ * un-emitted beat (`pendingIndex`); on resume that beat fires immediately, so
+ * the scenario continues without replaying or corrupting the beat chain. An
+ * adapter started while already yielded stays silent until resumed.
  */
 export function startDemoAdapter(emit: DemoEmit): () => void {
+  const forced = demoForcedByEnv()
   let stopped = false
   let timer: NodeJS.Timeout | undefined
+  // Next beat to fire; frozen here while yielded so a resume continues the
+  // chain exactly where emission stopped (never replaying emitted beats).
+  let pendingIndex = 0
 
-  function runBeat(index: number) {
-    if (stopped) return
+  const delayFor = (upcoming: number): number => (upcoming === 0 ? PAUSE_MS : BEAT_MS)
+
+  function fireBeat(index: number) {
     const now = new Date().toISOString()
     for (const draft of BEATS[index]()) {
       emissionCounter += 1
@@ -104,15 +147,39 @@ export function startDemoAdapter(emit: DemoEmit): () => void {
       }
       emit(event)
     }
-    const next = (index + 1) % BEATS.length
-    timer = setTimeout(() => runBeat(next), next === 0 ? PAUSE_MS : BEAT_MS)
   }
 
-  timer = setTimeout(() => runBeat(0), 0)
+  function schedule(index: number, delay: number) {
+    pendingIndex = index
+    timer = setTimeout(() => {
+      timer = undefined
+      if (stopped || (yielded && !forced)) return // frozen; resume() re-schedules pendingIndex
+      fireBeat(index)
+      const next = (index + 1) % BEATS.length
+      schedule(next, delayFor(next))
+    }, delay)
+  }
+
+  function applyYield(y: boolean) {
+    if (stopped || forced) return
+    if (y) {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+      // pendingIndex already names the next un-emitted beat
+    } else if (timer === undefined) {
+      schedule(pendingIndex, 0) // resume: continue the chain immediately
+    }
+  }
+
+  onYieldChange = applyYield
+  schedule(0, 0) // first beat fires immediately, as before
 
   return () => {
     stopped = true
     if (timer !== undefined) clearTimeout(timer)
     timer = undefined
+    if (onYieldChange === applyYield) onYieldChange = null
   }
 }
