@@ -1,0 +1,43 @@
+:root {
+  --bg: #12101f;
+  --panel: rgba(35, 35, 61, 0.92);
+  --ink: #1a1c2c;
+  --cream: #f2e6d8;
+  --plum: #4f4a73;
+  --violet: #9b5de5;
+  --teal: #5ad0c8;
+  --amber: #f5c66b;
+  --red: #d65656;
+}
+
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--cream);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+}
+
+.hq-root { position: fixed; inset: 0; }
+#office { position: absolute; inset: 0; }
+#office canvas { display: block; }
+
+/* loader overlay (removed by the scene slice once the office boots) */
+.hq-loader {
+  position: absolute; inset: 0; z-index: 10;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; background: var(--bg);
+}
+.hq-loader-mark { font-size: 42px; animation: hq-breathe 2.2s ease-in-out infinite; }
+.hq-loader-text {
+  font-size: 18px; font-weight: 600; letter-spacing: 0.04em;
+  background: linear-gradient(90deg, var(--violet), var(--amber));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hq-loader-sub { font-size: 12px; color: var(--plum); }
+@keyframes hq-breathe { 0%, 100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.08); opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .hq-loader-mark { animation: none; }
+  * { transition: none !important; }
+}
